@@ -23,7 +23,7 @@ def create_pdf(val):
     return pdf.output(dest='S').encode('latin-1')
 
 # The Button
-if st.button("Generate Report"):
+if st.button("Generate NVS Report"):
     pdf_data = create_pdf(budget)
     st.download_button(
         label="Download PDF Now",
