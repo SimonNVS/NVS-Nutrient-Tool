@@ -1,79 +1,81 @@
 import streamlit as st
+import pandas as pd
 from fpdf import FPDF
 
-# --- 1. THE APP SETUP ---
-st.set_page_config(page_title="Nitrate Ventures | Calculator", layout="wide")
-
-st.title("💧 Nitrate Ventures: Nutrient Assessment")
-
-# --- 2. ALL YOUR INPUTS ARE BACK ---
-with st.sidebar:
-    st.header("Project Details")
-    dwellings = st.number_input("Number of Dwellings", min_value=1, value=20)
-    occ_rate = st.number_input("Occupancy Rate", value=2.4)
-    wwtw_permit = st.number_input("WwTW Permit (mg/L)", value=10.0)
-    st.divider()
-    credit_price = st.number_input("Credit Price (£/kg)", value=3500)
-
-# --- 3. THE MATH (Stour Catchment Logic) ---
-total_pop = dwellings * occ_rate
-concentration = (wwtw_permit * 0.9) - 2
-annual_wwtw_kg = ((total_pop * 110) * concentration / 1_000_000) * 365
-
-# Simple Land Use Change
-net_land_change = (dwellings * 0.03 * 14.3) - (dwellings * 0.03 * 5.0)
-final_budget = (annual_wwtw_kg + net_land_change) * 1.2 # 20% Buffer
-revenue = abs(final_budget) * credit_price
-
-# --- 4. DISPLAY THE DASHBOARD ---
-col1, col2, col3 = st.columns(3)
-col1.metric("Nitrogen Load", f"{annual_wwtw_kg:.2f} kg/yr")
-col2.metric("Land Change", f"{net_land_change:.2f} kg/yr")
-col3.metric("Total Budget", f"{final_budget:.2f} kg/yr")
-
-st.divider()
-
-if final_budget > 0:
-    st.error(f"⚠️ Mitigation Required: £{revenue:,.2f}")
-else:
-    st.success(f"✅ Potential Credit Revenue: £{revenue:,.2f}")
-
-# --- 5. THE PDF GENERATOR (The "Secret Sauce") ---
-def create_pdf(b_val, r_val, d_val):
+def create_pdf(dataframe):
     pdf = FPDF()
     pdf.add_page()
     
-    # Header
-    pdf.set_font("Arial", 'B', 20)
-    pdf.cell(0, 20, "NITRATE VENTURES", ln=True, align="C")
-    
-    pdf.set_font("Arial", 'B', 14)
-    pdf.cell(0, 10, "Nutrient Neutrality Assessment Report", ln=True, align="C")
-    pdf.ln(10)
-    
-    # Data Rows
-    pdf.set_font("Arial", size=12)
-    pdf.cell(0, 10, f"Project Size: {d_val} Dwellings", ln=True)
-    pdf.cell(0, 10, f"Total Nitrogen Budget: {b_val:.2f} kg/year", ln=True)
-    pdf.cell(0, 10, f"Total Financial Forecast: GBP {r_val:,.2f}", ln=True)
-    
-    pdf.ln(20)
-    pdf.set_font("Arial", 'I', 10)
-    pdf.multi_cell(0, 10, "Disclaimer: This report is generated based on ADAS coefficients and the 20% precautionary buffer required for the Stour Catchment.")
-    
-    # Return the PDF as bytes
-    return pdf.output(dest='S').encode('latin-1')
+    # Title
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, txt="Nitrogen Load Calculator Report", ln=True, align='C')
+    pdf.ln(5)
 
-# --- 6. THE DOWNLOAD BUTTON ---
-st.divider()
-st.subheader("Final NVS Documentation")
+    # We will iterate through the rows of the Excel sheet.
+    # Based on the uploaded sheet, Column index 1 is 'Step', index 2 is 'Description', index 3 is 'Value'
+    for index, row in dataframe.iterrows():
+        # Clean up NaN values
+        col_step = str(row.iloc[1]) if pd.notna(row.iloc[1]) else ""
+        col_desc = str(row.iloc[2]) if pd.notna(row.iloc[2]) else ""
+        col_val  = str(row.iloc[3]) if pd.notna(row.iloc[3]) else ""
+        col_stat = str(row.iloc[4]) if pd.notna(row.iloc[4]) else ""
 
-# We pre-calculate the PDF data here
-pdf_data = create_pdf(final_budget, revenue, dwellings)
+        # Skip completely blank rows
+        if not col_step and not col_desc and not col_val:
+            continue
 
-st.download_button(
-    label="📥 Download Official NVS Assessment (PDF)",
-    data=pdf_data,
-    file_name="Nitrate_Ventures_Report.pdf",
-    mime="application/pdf"
-)
+        # If it's a "Step" header (e.g., "Step 1", "Step 2")
+        if str(col_step).strip().startswith("Step"):
+            pdf.ln(5) # Add a line break before new steps
+            pdf.set_font("Arial", 'B', 12)
+            pdf.multi_cell(0, 8, txt=f"{col_step}: {col_desc}")
+            pdf.set_font("Arial", '', 10) # Reset font for the items under the step
+            
+        # If it's a data row (Description + Value)
+        elif col_desc:
+            line_text = f"- {col_desc}"
+            if col_val:
+                line_text += f": {col_val}"
+            if col_stat and col_stat.isupper(): # Picks up tags like "SELECTED"
+                line_text += f" [{col_stat}]"
+                
+            pdf.multi_cell(0, 6, txt=line_text)
+
+    # Return PDF as bytes
+    # We use 'replace' to ensure special characters don't crash standard FPDF
+    return pdf.output(dest='S').encode('latin-1', 'replace')
+
+# --- STREAMLIT APP UI ---
+st.set_page_config(page_title="Nitrogen Load to PDF", page_icon="🌱")
+
+st.title("🌱 Nitrogen Load Report Generator")
+st.write("Upload your **Nitrogen Load Calculator** Excel file to generate a downloadable PDF summary.")
+
+uploaded_file = st.file_uploader("Upload Excel File (.xlsx)", type=['xlsx'])
+
+if uploaded_file:
+    try:
+        # Read the 'Calculator' sheet specifically, with no headers so we catch the raw grid
+        df = pd.read_excel(uploaded_file, sheet_name='Calculator', header=None)
+        
+        st.success("File successfully loaded!")
+        
+        # Show a quick preview of the raw data that was extracted
+        with st.expander("Preview Raw Data"):
+            st.dataframe(df.head(15))
+            
+        st.markdown("### Ready to Export")
+        
+        # Generate the PDF in memory
+        pdf_bytes = create_pdf(df)
+        
+        # Streamlit Download Button
+        st.download_button(
+            label="📄 Download PDF Report",
+            data=pdf_bytes,
+            file_name="Nitrogen_Load_Report.pdf",
+            mime="application/pdf"
+        )
+        
+    except Exception as e:
+        st.error(f"Error reading the file. Ensure the Excel file has a sheet named 'Calculator'.\nDetails: {e}")
